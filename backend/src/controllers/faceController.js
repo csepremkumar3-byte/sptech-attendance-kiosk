@@ -164,8 +164,8 @@ export async function identifyAndPunch(req, res) {
       isMasked = false
     } = req.body;
 
-    // 1. Prioritize true 512-D ArcFace biometric embedding from live camera snapshot
-    if (image) {
+    // 1. If liveEmbedding was not computed on-device, attempt extracting from image
+    if ((!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) && image) {
       try {
         const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
         const aiResult = await extractFaceFromImage(image, isMasked);
@@ -174,7 +174,7 @@ export async function identifyAndPunch(req, res) {
           isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
         }
       } catch (err) {
-        console.warn('AI ArcFace embedding extraction fallback:', err.message);
+        console.warn('AI embedding extraction error:', err.message);
       }
     }
 
