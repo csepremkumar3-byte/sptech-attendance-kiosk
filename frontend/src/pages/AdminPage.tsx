@@ -24,6 +24,7 @@ import {
   Percent,
   Gift,
   Eye,
+  Trash2,
   X
 } from 'lucide-react';
 import { apiRequest, getStoredToken, removeStoredToken, getStoredUser } from '../services/api';
@@ -383,6 +384,21 @@ export const AdminPage: React.FC = () => {
       }
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  // Wipe All Employee & Attendance Data
+  const handleWipeAllData = async () => {
+    const confirmText = prompt("Type 'WIPE' to delete all employee records, biometric templates, and attendance data:");
+    if (confirmText !== 'WIPE') return;
+    try {
+      const res = await apiRequest('/admin/wipe-data', { method: 'POST' });
+      if (res.success) {
+        alert('All employee data and attendance records wiped clean successfully!');
+        loadData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Wipe failed');
     }
   };
 
@@ -805,13 +821,24 @@ export const AdminPage: React.FC = () => {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <h1 className="text-2xl font-bold text-[#1A1D23] tracking-tight">Employees</h1>
-              <button
-                onClick={() => setShowAddEmpModal(true)}
-                className="px-4 py-2 rounded-xl bg-[#1A73C7] hover:bg-[#0F4C81] text-xs font-semibold text-white flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Employee</span>
-              </button>
+              <div className="flex items-center space-x-2.5">
+                <button
+                  type="button"
+                  onClick={handleWipeAllData}
+                  className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer shadow-2xs"
+                  title="Wipe all employees and attendance data"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Wipe All Data</span>
+                </button>
+                <button
+                  onClick={() => setShowAddEmpModal(true)}
+                  className="px-4 py-2 rounded-xl bg-[#1A73C7] hover:bg-[#0F4C81] text-xs font-semibold text-white flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Employee</span>
+                </button>
+              </div>
             </div>
 
             {/* Employee Table */}

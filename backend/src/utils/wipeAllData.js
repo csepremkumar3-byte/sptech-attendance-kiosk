@@ -22,7 +22,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function wipeAllApplicationData() {
+export async function wipeAllApplicationData() {
   console.log('========================================================');
   console.log('  SPTech Complete Data Wipe & Reset');
   console.log('========================================================');
@@ -52,14 +52,13 @@ async function wipeAllApplicationData() {
       const files = fs.readdirSync(uploadsDir);
       for (const file of files) {
         if (file.endsWith('.pdf')) {
-          fs.unlinkSync(path.join(uploadsDir, file));
+          try { fs.unlinkSync(path.join(uploadsDir, file)); } catch {}
         }
       }
       console.log('✓ Cleared all generated PDF salary slips from disk');
     }
 
     // 3. Ensure core infrastructure exists: Admin, Kiosks, Leave Types
-
     const kioskCount = await Kiosk.count();
     if (kioskCount === 0) {
       await Kiosk.create({
@@ -100,11 +99,16 @@ async function wipeAllApplicationData() {
     console.log('  WIPE COMPLETE: DASHBOARD & ALL DATA ARE CLEAN (0)');
     console.log('  Admin Login: admin / admin123');
     console.log('========================================================\n');
-    process.exit(0);
+    return { success: true, message: 'All employees, face templates, and attendance records wiped clean' };
   } catch (err) {
     console.error('Wipe error:', err);
-    process.exit(1);
+    throw err;
   }
 }
 
-wipeAllApplicationData();
+// If executed directly from command line
+if (process.argv[1] && process.argv[1].endsWith('wipeAllData.js')) {
+  wipeAllApplicationData()
+    .then(() => process.exit(0))
+    .catch(() => process.exit(1));
+}

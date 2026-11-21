@@ -6,8 +6,8 @@ import { verifyFaceBiometrics } from '../utils/faceMatcher.js';
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sptech_super_secret_jwt_key_2026_secure';
-const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.55');
-const MASKED_THRESHOLD = parseFloat(process.env.FACE_MASK_THRESHOLD || '0.50');
+const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.65');
+const MASKED_THRESHOLD = parseFloat(process.env.FACE_MASK_THRESHOLD || '0.55');
 const LIVENESS_THRESHOLD = parseFloat(process.env.LIVENESS_THRESHOLD || '0.50');
 
 export async function verifyFace(req, res) {
@@ -203,11 +203,9 @@ export async function identifyAndPunch(req, res) {
 
     for (const emp of enrolled) {
       const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
-      if (result.similarity > highestSimilarity) {
+      if (result.match && result.similarity > highestSimilarity) {
         highestSimilarity = result.similarity;
-        if (result.match) {
-          bestMatch = emp;
-        }
+        bestMatch = emp;
       }
     }
 

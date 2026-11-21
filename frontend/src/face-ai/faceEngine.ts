@@ -113,10 +113,29 @@ export function extractFaceBiometrics(
     ? Math.min(0.99, Math.max(0.70, (upperSkinRatio - lowerSkinRatio) * 1.5 + lowerMaskRatio * 0.5))
     : 0;
 
-  // 2. Generate 128-dimensional biometric feature descriptor
-  // Divides face region into an 8x8 spatial grid
+  // 2. Generate 128-dimensional structural biometric feature descriptor
+  // Uses Normalized Spatial Contrast & Gradient Distribution across 8x8 facial zones
   // Rows 0 to 3 = Upper Face (Periocular: forehead, eyebrows, eyes, nasion) -> dims 0 to 63
-  // Rows 4 to 7 = Lower Face (Nose, mouth, chin, jawline) -> dims 64 to 127
+  // Rows 4 to 7 = Lower Face (Nose bridge, cheeks, philtrum, mouth, chin) -> dims 64 to 127
+  const lumMap = new Float32Array(faceW * faceH);
+  let sumLum = 0;
+  for (let i = 0; i < faceW * faceH; i++) {
+    const r = data[i * 4];
+    const g = data[i * 4 + 1];
+    const b = data[i * 4 + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    lumMap[i] = lum;
+    sumLum += lum;
+  }
+
+  const meanFaceLum = sumLum / (faceW * faceH);
+  let varLum = 0;
+  for (let i = 0; i < faceW * faceH; i++) {
+    const diff = lumMap[i] - meanFaceLum;
+    varLum += diff * diff;
+  }
+  const stdFaceLum = Math.sqrt(varLum / (faceW * faceH)) || 1;
+
   const embedding: number[] = [];
   const gridRows = 8;
   const gridCols = 8;
@@ -125,23 +144,30 @@ export function extractFaceBiometrics(
 
   for (let r = 0; r < gridRows; r++) {
     for (let c = 0; c < gridCols; c++) {
-      let cellR = 0, cellG = 0, cellB = 0, count = 0;
-      for (let y = r * cellH; y < (r + 1) * cellH; y += 2) {
-        for (let x = c * cellW; x < (c + 1) * cellW; x += 2) {
-          const idx = (y * faceW + x) * 4;
-          cellR += data[idx];
-          cellG += data[idx + 1];
-          cellB += data[idx + 2];
+      let cellLumSum = 0;
+      let leftLum = 0, rightLum = 0;
+      let topLum = 0, bottomLum = 0;
+      let count = 0;
+
+      for (let y = r * cellH; y < (r + 1) * cellH; y++) {
+        for (let x = c * cellW; x < (c + 1) * cellW; x++) {
+          const lum = lumMap[y * faceW + x];
+          cellLumSum += lum;
+          if (x < c * cellW + Math.floor(cellW / 2)) leftLum += lum; else rightLum += lum;
+          if (y < r * cellH + Math.floor(cellH / 2)) topLum += lum; else bottomLum += lum;
           count++;
         }
       }
-      const meanR = cellR / (count || 1);
-      const meanG = cellG / (count || 1);
-      const meanB = cellB / (count || 1);
 
-      // 2 normalized feature metrics per cell -> 64 * 2 = 128 dimensional vector
-      embedding.push((meanR - meanB) / 255);
-      embedding.push((meanG - (meanR + meanB) / 2) / 255);
+      const cellMean = cellLumSum / (count || 1);
+      const halfCount = Math.floor(count / 2) || 1;
+      const hGrad = (rightLum - leftLum) / halfCount;
+      const vGrad = (bottomLum - topLum) / halfCount;
+
+      // Metric 1: Contrast relative to face baseline (deep eye sockets, bright forehead/cheeks)
+      embedding.push((cellMean - meanFaceLum) / stdFaceLum);
+      // Metric 2: Structural directional gradient (facial contours & features)
+      embedding.push((hGrad + vGrad) / stdFaceLum);
     }
   }
 

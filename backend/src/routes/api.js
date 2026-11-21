@@ -88,4 +88,15 @@ router.get('/reports/attendance', authenticate, repCtrl.getAttendanceReport);
 // 12. Audit Logs
 router.get('/audit', authenticate, requireAdmin, audCtrl.getAuditLogs);
 
+// 13. System Wipe & Reset
+router.post('/admin/wipe-data', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { wipeAllApplicationData } = await import('../utils/wipeAllData.js');
+    const result = await wipeAllApplicationData();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 export default router;
