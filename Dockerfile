@@ -33,6 +33,6 @@ ENV PORT=5000
 # Persistent storage for uploads & database
 VOLUME ["/app/uploads", "/app/data"]
 
-EXPOSE 5000
+EXPOSE 80 443 5000
 
 CMD ["node", "src/server.js"]

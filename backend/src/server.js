@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
+import https from 'https';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
@@ -112,12 +114,49 @@ async function startServer() {
     // Run Initial Seed
     await seedInitialData();
 
-    app.listen(PORT, () => {
-      console.log(`====================================================`);
-      console.log(`  SPTech AI Attendance & Payroll API running on port ${PORT}`);
-      console.log(`  Health Check: http://localhost:${PORT}/health`);
-      console.log(`====================================================`);
-    });
+    // Check if SSL certificates exist (Let's Encrypt production mode)
+    const sslKeyCandidates = [
+      '/etc/letsencrypt/live/facex.sp-tech.in/privkey.pem',
+      path.resolve(process.cwd(), 'ssl/privkey.pem'),
+    ];
+    const sslCertCandidates = [
+      '/etc/letsencrypt/live/facex.sp-tech.in/fullchain.pem',
+      path.resolve(process.cwd(), 'ssl/fullchain.pem'),
+    ];
+
+    const sslKeyPath = sslKeyCandidates.find(p => fs.existsSync(p));
+    const sslCertPath = sslCertCandidates.find(p => fs.existsSync(p));
+
+    if (sslKeyPath && sslCertPath) {
+      const sslOptions = {
+        key: fs.readFileSync(sslKeyPath),
+        cert: fs.readFileSync(sslCertPath),
+      };
+
+      // Start HTTPS Server on Port 443
+      https.createServer(sslOptions, app).listen(443, () => {
+        console.log(`====================================================`);
+        console.log(`  ✓ SPTech HTTPS Server active on port 443`);
+        console.log(`  ✓ Secure Kiosk: https://facex.sp-tech.in/kiosk`);
+        console.log(`====================================================`);
+      });
+
+      // Redirect HTTP (Port 80) to HTTPS (Port 443)
+      http.createServer((req, res) => {
+        const host = req.headers.host ? req.headers.host.split(':')[0] : 'facex.sp-tech.in';
+        res.writeHead(301, { Location: `https://${host}${req.url}` });
+        res.end();
+      }).listen(80, () => {
+        console.log(`  ✓ HTTP Port 80 redirecting traffic to HTTPS 443`);
+      });
+    } else {
+      app.listen(PORT, () => {
+        console.log(`====================================================`);
+        console.log(`  SPTech AI Attendance & Payroll API running on port ${PORT}`);
+        console.log(`  Health Check: http://localhost:${PORT}/health`);
+        console.log(`====================================================`);
+      });
+    }
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
