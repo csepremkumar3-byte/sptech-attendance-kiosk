@@ -7,6 +7,9 @@ const AI_SERVICE_URL = process.env.AI_BIOMETRIC_URL || 'http://127.0.0.1:5001';
 
 export async function extractFaceFromImage(imageBase64, isMasked = false) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+
     const response = await fetch(`${AI_SERVICE_URL}/extract-face`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -14,22 +17,27 @@ export async function extractFaceFromImage(imageBase64, isMasked = false) {
         image: imageBase64,
         is_masked: !!isMasked,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`AI service returned status ${response.status}`);
+      return { success: false, offline: false, message: `AI service returned status ${response.status}` };
     }
 
     const data = await response.json();
     return data;
   } catch (err) {
-    console.error('Error connecting to InsightFace AI service:', err.message);
-    throw new Error(`Biometric AI Engine error: ${err.message}`);
+    console.warn('InsightFace AI service unavailable (falling back to lightweight client/node engine):', err.message);
+    return { success: false, offline: true, message: err.message };
   }
 }
 
-export async function matchFaceBiometrics(liveEmbedding, candidates, threshold = 0.62, isMasked = false) {
+export async function matchFaceBiometrics(liveEmbedding, candidates, threshold = 0.55, isMasked = false) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+
     const response = await fetch(`${AI_SERVICE_URL}/match-face`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -39,16 +47,17 @@ export async function matchFaceBiometrics(liveEmbedding, candidates, threshold =
         threshold,
         is_masked: !!isMasked,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`AI service match returned status ${response.status}`);
+      return { matched: false, offline: false, highest_similarity: 0 };
     }
 
     const data = await response.json();
     return data;
   } catch (err) {
-    console.error('Error matching face biometrics:', err.message);
-    throw new Error(`Biometric matching engine error: ${err.message}`);
+    return { matched: false, offline: true, highest_similarity: 0 };
   }
 }

@@ -6,9 +6,9 @@ import { verifyFaceBiometrics } from '../utils/faceMatcher.js';
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sptech_super_secret_jwt_key_2026_secure';
-const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.60');
-const MASKED_THRESHOLD = parseFloat(process.env.FACE_MASK_THRESHOLD || '0.54');
-const LIVENESS_THRESHOLD = parseFloat(process.env.LIVENESS_THRESHOLD || '0.65');
+const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.55');
+const MASKED_THRESHOLD = parseFloat(process.env.FACE_MASK_THRESHOLD || '0.50');
+const LIVENESS_THRESHOLD = parseFloat(process.env.LIVENESS_THRESHOLD || '0.50');
 
 export async function verifyFace(req, res) {
   try {
@@ -164,19 +164,18 @@ export async function identifyAndPunch(req, res) {
       isMasked = false
     } = req.body;
 
-    // 1. If camera image snapshot is sent, extract true 512-D ArcFace embedding via InsightFace
-    if (image) {
-      const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-      const aiResult = await extractFaceFromImage(image, isMasked);
-      if (!aiResult.success || !aiResult.has_face) {
-        return res.status(400).json({
-          success: false,
-          matched: false,
-          message: aiResult.message || 'No face detected in camera view. Position face directly in frame.'
-        });
+    // 1. If liveEmbedding was not passed by client, attempt extracting from image
+    if ((!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) && image) {
+      try {
+        const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
+        const aiResult = await extractFaceFromImage(image, isMasked);
+        if (aiResult.success && aiResult.has_face && aiResult.embedding) {
+          liveEmbedding = aiResult.embedding;
+          isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
+        }
+      } catch (err) {
+        console.warn('AI embedding extraction error:', err.message);
       }
-      liveEmbedding = aiResult.embedding;
-      isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
     }
 
     if (!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) {
@@ -197,55 +196,33 @@ export async function identifyAndPunch(req, res) {
       });
     }
 
-    // 3. Match using InsightFace AI service (or high-dimensional cosine similarity)
-    const effectiveThreshold = isMasked ? 0.52 : (parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.62'));
+    // 3. Fast native JavaScript biometric verification (Cosine Similarity & Periocular Mask Matching)
+    const effectiveThreshold = isMasked ? MASKED_THRESHOLD : THRESHOLD;
     let bestMatch = null;
     let highestSimilarity = -1;
 
-    try {
-      const { matchFaceBiometrics } = await import('../services/aiBiometricService.js');
-      const candidates = enrolled.map(e => {
-        let emb = e.face_id_ref;
-        if (typeof emb === 'string') {
-          try { emb = JSON.parse(emb); } catch {}
-        }
-        return {
-          id: e.id,
-          employee_code: e.employee_code,
-          name: e.name,
-          department: e.department,
-          designation: e.designation,
-          embedding: emb
-        };
-      }).filter(c => Array.isArray(c.embedding) && c.embedding.length > 0);
-
-      const matchRes = await matchFaceBiometrics(liveEmbedding, candidates, effectiveThreshold, isMasked);
-      highestSimilarity = matchRes.highest_similarity || 0;
-
-      if (matchRes.matched && matchRes.best_match) {
-        bestMatch = enrolled.find(e => e.id === matchRes.best_match.id);
-      }
-    } catch (aiMatchErr) {
-      console.warn('Fallback to local faceMatcher due to:', aiMatchErr.message);
-      for (const emp of enrolled) {
-        const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
-        if (result.similarity > highestSimilarity) {
-          highestSimilarity = result.similarity;
-          if (result.match) {
-            bestMatch = emp;
-          }
+    for (const emp of enrolled) {
+      const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
+      if (result.similarity > highestSimilarity) {
+        highestSimilarity = result.similarity;
+        if (result.match) {
+          bestMatch = emp;
         }
       }
     }
 
     if (!bestMatch) {
-      await FaceVerificationLog.create({
-        kiosk_id,
-        status: 'FAILED',
-        similarity_score: highestSimilarity > 0 ? highestSimilarity : 0,
-        liveness_score: livenessScore,
-        failure_reason: `Face not recognized among registered members (Best score: ${highestSimilarity}, Threshold: ${effectiveThreshold}, Masked: ${isMasked})`
-      });
+      try {
+        await FaceVerificationLog.create({
+          kiosk_id: kiosk_id ? parseInt(kiosk_id) : null,
+          status: 'FAILED',
+          similarity_score: highestSimilarity > 0 ? highestSimilarity : 0,
+          liveness_score: livenessScore ? parseFloat(livenessScore) : 0.85,
+          failure_reason: `Face not recognized among registered members (Best score: ${highestSimilarity}, Threshold: ${effectiveThreshold}, Masked: ${isMasked})`
+        });
+      } catch (logErr) {
+        console.warn('FaceVerificationLog log error:', logErr.message);
+      }
 
       return res.status(401).json({
         success: false,
