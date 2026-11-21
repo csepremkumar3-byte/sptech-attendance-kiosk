@@ -1,0 +1,12 @@
+{
+  "name": "sptech-ai-attendance-kiosk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Complete AI-Based Employee Attendance Kiosk and Payroll Progressive Web Application (PWA)",
+  "scripts": {
+    "dev:ai": "python ai_service/main.py",
+    "dev:backend": "cd backend && npm start",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build"
+  }
+}
