@@ -28,6 +28,10 @@ export const CameraView: React.FC<CameraViewProps> = ({
     async function initCamera() {
       try {
         setCameraError(null);
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setCameraError('Camera access requires secure HTTPS. Please access via your HTTPS domain (https://facex.sp-tech.in).');
+          return;
+        }
         const mediaStream = await navigator.mediaDevices.getUserMedia({
           video: {
             width: { ideal: 640 },
