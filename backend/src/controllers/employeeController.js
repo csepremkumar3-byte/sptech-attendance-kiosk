@@ -315,17 +315,22 @@ export async function enrollFace(req, res) {
     const { embedding, image, qualityScore = 0.95 } = req.body;
     let targetEmbedding = embedding;
 
-    // If embedding was not computed on-device, extract true 512-D ArcFace embedding via Python InsightFace service
-    if ((!targetEmbedding || !Array.isArray(targetEmbedding) || targetEmbedding.length < 10) && image) {
-      const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-      const aiResult = await extractFaceFromImage(image);
-      if (!aiResult.success || !aiResult.has_face) {
-        return res.status(400).json({
-          success: false,
-          message: aiResult.message || 'No clear face detected in enrollment image. Please face the camera.'
-        });
+    // Prioritize high-accuracy 512-D ArcFace embedding from image via InsightFace
+    if (image) {
+      try {
+        const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
+        const aiResult = await extractFaceFromImage(image);
+        if (aiResult.success && aiResult.has_face && aiResult.embedding) {
+          targetEmbedding = aiResult.embedding;
+        } else if (!targetEmbedding || !Array.isArray(targetEmbedding) || targetEmbedding.length < 10) {
+          return res.status(400).json({
+            success: false,
+            message: aiResult.message || 'No clear face detected in enrollment image. Please face the camera.'
+          });
+        }
+      } catch (aiErr) {
+        console.warn('InsightFace enrollment extraction fallback:', aiErr.message);
       }
-      targetEmbedding = aiResult.embedding;
     }
 
     if (!targetEmbedding || !Array.isArray(targetEmbedding) || targetEmbedding.length < 10) {

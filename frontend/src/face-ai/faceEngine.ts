@@ -38,24 +38,67 @@ export function extractFaceBiometrics(
   // Draw current video frame to canvas
   ctx.drawImage(videoElement, 0, 0, width, height);
 
-  // Sample center area where user face should be
-  const centerX = Math.floor(width * 0.25);
-  const centerY = Math.floor(height * 0.15);
-  const faceW = Math.floor(width * 0.50);
-  const faceH = Math.floor(height * 0.70);
+  // 1. Dynamic Face Detection & Localization (Tracks face anywhere across desktop or mobile cameras)
+  const fullFrame = ctx.getImageData(0, 0, width, height);
+  const fullData = fullFrame.data;
+
+  let minX = width, maxX = 0, minY = height, maxY = 0;
+  let skinCount = 0;
+  let sumX = 0, sumY = 0;
+
+  for (let y = 0; y < height; y += 4) {
+    for (let x = 0; x < width; x += 4) {
+      const idx = (y * width + x) * 4;
+      const r = fullData[idx];
+      const g = fullData[idx + 1];
+      const b = fullData[idx + 2];
+      const isSkin = r > 60 && g > 35 && b > 20 && r > g && r > b && (r - g) >= 10 && (Math.max(r, g, b) - Math.min(r, g, b)) > 12;
+      if (isSkin) {
+        skinCount++;
+        sumX += x;
+        sumY += y;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  const minRequiredSkin = (width * height * 0.015) / 16;
+  if (skinCount < minRequiredSkin) {
+    return {
+      hasFace: false,
+      multipleFaces: false,
+      qualityScore: 0.1,
+      livenessScore: 0,
+      embedding: [],
+      isMasked: false,
+    };
+  }
+
+  const cx = sumX / skinCount;
+  const cy = sumY / skinCount;
+  const rawW = maxX - minX;
+  const rawH = maxY - minY;
+  const faceDim = Math.max(rawW, rawH * 0.85);
+
+  const centerX = Math.max(0, Math.min(width - faceDim, Math.round(cx - faceDim / 2)));
+  const centerY = Math.max(0, Math.min(height - faceDim * 1.2, Math.round(cy - faceDim * 0.55)));
+  const faceW = Math.max(40, Math.min(width - centerX, Math.round(faceDim)));
+  const faceH = Math.max(50, Math.min(height - centerY, Math.round(faceDim * 1.2)));
 
   const frameData = ctx.getImageData(centerX, centerY, faceW, faceH);
   const data = frameData.data;
 
-  // 1. Zonal Skin Tone & Mask Occlusion Analysis
-  // Upper 45% (Forehead, Eyebrows, Periocular Eyes) vs Lower 55% (Nose, Mouth, Chin)
+  // 2. Zonal Skin Tone & Mask Occlusion Analysis
   const splitY = Math.floor(faceH * 0.45);
   let upperSkinPixels = 0;
   let upperTotalPixels = 0;
   let lowerSkinPixels = 0;
   let lowerTotalPixels = 0;
   let brightnessSum = 0;
-  let lowerMaskSurgicalPixels = 0; // Blue/cyan/dark cloth detection
+  let lowerMaskSurgicalPixels = 0;
 
   for (let y = 0; y < faceH; y++) {
     for (let x = 0; x < faceW; x++) {
@@ -66,7 +109,6 @@ export function extractFaceBiometrics(
       const brightness = (r + g + b) / 3;
       brightnessSum += brightness;
 
-      // Skin detection heuristic in RGB space
       const isSkin = r > 60 && g > 40 && b > 20 && r > g && r > b && (Math.max(r, g, b) - Math.min(r, g, b)) > 15;
 
       if (y < splitY) {
@@ -76,7 +118,6 @@ export function extractFaceBiometrics(
         lowerTotalPixels++;
         if (isSkin) lowerSkinPixels++;
 
-        // Surgical cyan/blue mask or dark/white cloth mask indicator
         const isSurgicalBlue = (b > r + 15 && g > r + 5) || (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && brightness < 70) || (brightness > 200 && Math.abs(r - g) < 15);
         if (isSurgicalBlue) lowerMaskSurgicalPixels++;
       }
@@ -89,11 +130,8 @@ export function extractFaceBiometrics(
   const lowerSkinRatio = lowerSkinPixels / (lowerTotalPixels || 1);
   const lowerMaskRatio = lowerMaskSurgicalPixels / (lowerTotalPixels || 1);
 
-  // Quality criteria: adequate lighting, face filling viewport
   const isLightingGood = avgBrightness > 35 && avgBrightness < 225;
-
-  // Face presence confirmed if upper region (eyes/forehead) exhibits genuine skin tone & structure
-  const hasFace = (upperSkinRatio > 0.15 || (upperSkinRatio + lowerSkinRatio) > 0.20) && isLightingGood;
+  const hasFace = (upperSkinRatio > 0.12 || (upperSkinRatio + lowerSkinRatio) > 0.15) && isLightingGood;
 
   if (!hasFace) {
     return {
