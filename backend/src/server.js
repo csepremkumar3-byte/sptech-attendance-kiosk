@@ -23,6 +23,7 @@ const PORT = process.env.PORT || 5000;
 
 // Security & Middlewares
 app.use(helmet({
+  contentSecurityPolicy: false,
   crossOriginResourcePolicy: false,
 }));
 app.use(cors({
@@ -69,8 +70,12 @@ const candidateDists = [
   path.resolve(__dirname, '../../frontend/dist'),
   path.resolve(__dirname, '../frontend/dist'),
   path.resolve(__dirname, './frontend/dist'),
+  path.resolve(process.cwd(), 'frontend/dist'),
+  path.resolve(process.cwd(), '../frontend/dist'),
 ];
-const frontendDist = candidateDists.find(p => fs.existsSync(p)) || candidateDists[0];
+const frontendDist = candidateDists.find(p => fs.existsSync(p) && fs.existsSync(path.join(p, 'index.html'))) || candidateDists[0];
+console.log(`✓ Serving frontend from: ${frontendDist} (valid index.html: ${fs.existsSync(path.join(frontendDist, 'index.html'))})`);
+
 app.use(express.static(frontendDist));
 
 // Catch-all route to serve SPA index.html for client-side routing (prevents 404 on refresh)
@@ -79,9 +84,10 @@ app.get('*', (req, res, next) => {
     return res.status(404).json({ success: false, message: `API endpoint ${req.path} not found` });
   }
   const indexPath = path.join(frontendDist, 'index.html');
-  res.sendFile(indexPath, (err) => {
-    if (err) next();
-  });
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  return res.status(404).send('Frontend build not found. Please build frontend first.');
 });
 
 // Global Error Handler
