@@ -1,6 +1,7 @@
 service: sptech-attendance-kiosk
 
 frameworkVersion: '3'
+useDotenv: true
 
 provider:
   name: aws
