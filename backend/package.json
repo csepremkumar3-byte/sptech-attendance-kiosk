@@ -10,6 +10,9 @@
     "seed": "node src/utils/seeder.js"
   },
   "dependencies": {
+    "@aws-sdk/client-acm": "^3.1179.0",
+    "@aws-sdk/client-apigatewayv2": "^3.1179.0",
+    "@aws-sdk/client-cloudfront": "^3.1179.0",
     "@aws-sdk/client-rekognition": "^3.1179.0",
     "@aws-sdk/client-s3": "^3.1179.0",
     "@codegenie/serverless-express": "^5.0.0",

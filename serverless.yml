@@ -40,7 +40,12 @@ provider:
 package:
   patterns:
     - '!node_modules/**'
-    - '!frontend/**'
+    - '!frontend/src/**'
+    - '!frontend/node_modules/**'
+    - '!frontend/public/**'
+    - '!frontend/package.json'
+    - '!frontend/tsconfig*.json'
+    - 'frontend/dist/**'
     - '!ai_service/**'
     - 'backend/**'
     - 'package.json'
