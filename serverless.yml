@@ -10,7 +10,8 @@ provider:
   timeout: 30
   environment:
     NODE_ENV: production
-    DB_DIALECT: ${env:DB_DIALECT, 'sqlite'}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    DB_DIALECT: ${env:DB_DIALECT, 'postgres'}
     DB_STORAGE: /tmp/database.sqlite
     JWT_SECRET: ${env:JWT_SECRET, 'sptech_super_secret_jwt_key_2026_production'}
     JWT_EXPIRES_IN: 7d
