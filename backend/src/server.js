@@ -78,7 +78,33 @@ const candidateDists = [
 const frontendDist = candidateDists.find(p => fs.existsSync(p) && fs.existsSync(path.join(p, 'index.html'))) || candidateDists[0];
 console.log(`✓ Serving frontend from: ${frontendDist} (valid index.html: ${fs.existsSync(path.join(frontendDist, 'index.html'))})`);
 
-app.use(express.static(frontendDist));
+// Permanent Anti-Stale Cache Solution
+app.get('/sw.js', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  const swPath = path.join(frontendDist, 'sw.js');
+  if (fs.existsSync(swPath)) {
+    return res.sendFile(swPath);
+  }
+  res.status(404).send('SW not found');
+});
+
+// Serve assets with immutable cache (they have unique content hashes)
+app.use('/assets', express.static(path.join(frontendDist, 'assets'), {
+  maxAge: '1y',
+  immutable: true
+}));
+
+app.use(express.static(frontendDist, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.json')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 // Catch-all route to serve SPA index.html for client-side routing (prevents 404 on refresh)
 app.get('*', (req, res, next) => {
@@ -87,6 +113,10 @@ app.get('*', (req, res, next) => {
   }
   const indexPath = path.join(frontendDist, 'index.html');
   if (fs.existsSync(indexPath)) {
+    // ALWAYS serve index.html with NO CACHE so users always get new deployments instantly
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     return res.sendFile(indexPath);
   }
   return res.status(404).send('Frontend build not found. Please build frontend first.');
