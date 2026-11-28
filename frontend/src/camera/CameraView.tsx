@@ -19,7 +19,10 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [detectionState, setDetectionState] = useState<FaceDetectionResult | null>(null);
+  const [blinkPrompt, setBlinkPrompt] = useState<'looking' | 'blinking' | 'confirmed'>('looking');
   const previousFrames = useRef<number[][]>([]);
+  const eyeHistoryRef = useRef<{ openness: number; time: number }[]>([]);
+  const lastBlinkRef = useRef(0);
   const hasCapturedRef = useRef(false);
 
   useEffect(() => {
@@ -83,19 +86,56 @@ export const CameraView: React.FC<CameraViewProps> = ({
 
       setDetectionState(result);
 
-      if (result.hasFace && result.embedding.length > 0) {
-        previousFrames.current.push(result.embedding);
-        if (previousFrames.current.length > 5) {
-          previousFrames.current.shift();
+      if (result.hasFace) {
+        if (result.embedding.length > 0) {
+          previousFrames.current.push(result.embedding);
+          if (previousFrames.current.length > 5) {
+            previousFrames.current.shift();
+          }
         }
 
-        // Auto-capture when face quality and liveness are confirmed
+        // Real-time eye blink liveness tracking
+        if (result.eyeOpenness !== undefined) {
+          const now = Date.now();
+          eyeHistoryRef.current.push({ openness: result.eyeOpenness, time: now });
+          if (eyeHistoryRef.current.length > 8) eyeHistoryRef.current.shift();
+
+          if (eyeHistoryRef.current.length >= 4) {
+            const hist = eyeHistoryRef.current;
+            const current = hist[hist.length - 1].openness;
+            const lowest = Math.min(...hist.slice(hist.length - 3).map(h => h.openness));
+            const previousHigh = Math.max(...hist.slice(0, hist.length - 2).map(h => h.openness));
+
+            const wasOpen = previousHigh > 0.42;
+            const didDip = lowest < 0.28;
+            const reopened = current > 0.42;
+
+            if (wasOpen && didDip && reopened && (now - lastBlinkRef.current > 1500)) {
+              lastBlinkRef.current = now;
+              result.blinkDetected = true;
+              result.livenessScore = 0.99;
+              setBlinkPrompt('confirmed');
+
+              // Trigger attendance immediately on confirmed blink!
+              if (!hasCapturedRef.current) {
+                hasCapturedRef.current = true;
+                onFaceCaptured(result);
+              }
+            } else if (lowest < 0.28 && !reopened) {
+              setBlinkPrompt('blinking');
+            } else {
+              setBlinkPrompt('looking');
+            }
+          }
+        }
+
+        // Fallback auto-capture if user stays steady in frame
         if (autoCaptureOnReady && result.qualityScore >= 0.70 && result.livenessScore >= 0.65 && !hasCapturedRef.current) {
           hasCapturedRef.current = true;
           onFaceCaptured(result);
         }
       }
-    }, 250);
+    }, 200);
 
     return () => clearInterval(intervalId);
   }, [stream, isScanning, autoCaptureOnReady, onFaceCaptured]);
@@ -200,11 +240,31 @@ export const CameraView: React.FC<CameraViewProps> = ({
               </span>
 
               {detectionState?.hasFace && scanStatus === 'idle' && (
-                <div className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-white text-xs font-medium shadow-sm ${
-                  detectionState?.isMasked ? 'bg-[#1A73C7]' : 'bg-[#2FA84F]'
-                }`}>
-                  <span className="font-bold text-[10px]">✓</span>
-                  <span>{detectionState?.isMasked ? 'Periocular Match Active' : 'Face Detected'}</span>
+                <div className="flex flex-col items-center space-y-1.5">
+                  <div className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-white text-xs font-medium shadow-sm ${
+                    detectionState?.isMasked ? 'bg-[#1A73C7]' : 'bg-[#2FA84F]'
+                  }`}>
+                    <span className="font-bold text-[10px]">✓</span>
+                    <span>{detectionState?.isMasked ? 'Periocular Match Active' : 'Face Detected'}</span>
+                  </div>
+
+                  {/* Liveness Eye Blink Verification Badge */}
+                  <div className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold backdrop-blur-md transition-all ${
+                    blinkPrompt === 'confirmed'
+                      ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-300'
+                      : blinkPrompt === 'blinking'
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-black/60 text-white'
+                  }`}>
+                    <span>{blinkPrompt === 'confirmed' ? '✓' : '👁️'}</span>
+                    <span>
+                      {blinkPrompt === 'confirmed'
+                        ? 'Blink Verified!'
+                        : blinkPrompt === 'blinking'
+                        ? 'Blinking...'
+                        : 'Blink eyes to punch'}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

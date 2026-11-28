@@ -24,6 +24,14 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.TEXT, // Stored biometric reference / embedding JSON string
     allowNull: true,
   },
+  profile_photo: {
+    type: DataTypes.TEXT, // URL or path to stored profile picture
+    allowNull: true,
+  },
+  rekognition_face_id: {
+    type: DataTypes.STRING, // AWS Rekognition FaceId in the collection
+    allowNull: true,
+  },
   shift_id: {
     type: DataTypes.INTEGER,
     allowNull: true,

@@ -860,7 +860,22 @@ export const AdminPage: React.FC = () => {
                   {employees.map((emp) => (
                     <tr key={emp.id} className="hover:bg-[#F7F8FA] transition">
                       <td className="p-3.5 font-mono text-[#0F4C81] font-bold">{emp.employee_code}</td>
-                      <td className="p-3.5 font-semibold text-[#1A1D23]">{emp.name}</td>
+                      <td className="p-3.5">
+                        <div className="flex items-center space-x-2.5">
+                          {emp.profile_photo ? (
+                            <img
+                              src={emp.profile_photo}
+                              alt={emp.name}
+                              className="w-8 h-8 rounded-full object-cover border border-[#E4E7EB] shadow-2xs"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-[#1A73C7]/10 text-[#1A73C7] font-bold flex items-center justify-center text-xs">
+                              {emp.name.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <span className="font-semibold text-[#1A1D23]">{emp.name}</span>
+                        </div>
+                      </td>
                       <td className="p-3.5 text-slate-600">{emp.department} • {emp.designation}</td>
                       <td className="p-3.5">
                         <select

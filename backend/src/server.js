@@ -107,8 +107,8 @@ async function startServer() {
     await sequelize.authenticate();
     console.log(`✓ Database connected (${process.env.DB_DIALECT || 'sqlite'})`);
 
-    // Sync schema
-    await sequelize.sync();
+    // Sync schema with auto-migration for added columns
+    await sequelize.sync({ alter: true });
     console.log('✓ Database tables synchronized');
 
     // Run Initial Seed
@@ -163,4 +163,9 @@ async function startServer() {
   }
 }
 
-startServer();
+// Only start the HTTP server if running directly (not imported by AWS Lambda or tests)
+if (!process.env.AWS_EXECUTION_ENV && process.argv[1] && process.argv[1].includes('server.js')) {
+  startServer();
+}
+
+export { app, startServer };

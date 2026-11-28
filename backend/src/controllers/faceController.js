@@ -164,48 +164,75 @@ export async function identifyAndPunch(req, res) {
       isMasked = false
     } = req.body;
 
-    // 1. If liveEmbedding was not computed on-device, attempt extracting from image
-    if ((!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) && image) {
+    let bestMatch = null;
+    let highestSimilarity = -1;
+    let biometricMode = isMasked ? 'PERIOCULAR_MASKED' : 'ON_DEVICE_EMBEDDING';
+
+    // Tier 1: Search AWS Rekognition Face Collection if configured
+    if (image) {
       try {
-        const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-        const aiResult = await extractFaceFromImage(image, isMasked);
-        if (aiResult.success && aiResult.has_face && aiResult.embedding) {
-          liveEmbedding = aiResult.embedding;
-          isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
+        const { isRekognitionConfigured, searchEmployeeFace } = await import('../services/awsRekognitionService.js');
+        if (isRekognitionConfigured()) {
+          const rekMatch = await searchEmployeeFace(image, 80);
+          if (rekMatch.matched && rekMatch.employeeId) {
+            const matchedEmp = await Employee.findOne({
+              where: { id: rekMatch.employeeId, status: 'ACTIVE' },
+              attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'profile_photo', 'face_id_ref', 'shift_id', 'epf_number']
+            });
+            if (matchedEmp) {
+              bestMatch = matchedEmp;
+              highestSimilarity = rekMatch.similarity / 100;
+              biometricMode = 'AWS_REKOGNITION';
+            }
+          }
         }
-      } catch (err) {
-        console.warn('AI embedding extraction error:', err.message);
+      } catch (rekErr) {
+        console.warn('AWS Rekognition live search fallback:', rekErr.message);
       }
     }
 
-    if (!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) {
-      return res.status(400).json({ success: false, message: 'No face biometric data captured. Position face in camera.' });
-    }
+    // Tier 2: Match using high-dimensional on-device biometrics
+    if (!bestMatch) {
+      // 1. If liveEmbedding was not computed on-device, attempt extracting from image
+      if ((!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) && image) {
+        try {
+          const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
+          const aiResult = await extractFaceFromImage(image, isMasked);
+          if (aiResult.success && aiResult.has_face && aiResult.embedding) {
+            liveEmbedding = aiResult.embedding;
+            isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
+          }
+        } catch (err) {
+          console.warn('AI embedding extraction error:', err.message);
+        }
+      }
 
-    // 2. Fetch all active employees with enrolled biometrics
-    const employees = await Employee.findAll({
-      where: { status: 'ACTIVE' },
-      attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'face_id_ref', 'shift_id', 'epf_number']
-    });
+      if (!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) {
+        return res.status(400).json({ success: false, message: 'No face biometric data captured. Position face in camera.' });
+      }
 
-    const enrolled = employees.filter(e => e.face_id_ref);
-    if (enrolled.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No registered face members found in system. Please enroll biometrics or enter ID manually.'
+      // 2. Fetch all active employees with enrolled biometrics
+      const employees = await Employee.findAll({
+        where: { status: 'ACTIVE' },
+        attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'profile_photo', 'face_id_ref', 'shift_id', 'epf_number']
       });
-    }
 
-    // 3. Fast native JavaScript biometric verification (Cosine Similarity & Periocular Mask Matching)
-    const effectiveThreshold = isMasked ? MASKED_THRESHOLD : THRESHOLD;
-    let bestMatch = null;
-    let highestSimilarity = -1;
+      const enrolled = employees.filter(e => e.face_id_ref);
+      if (enrolled.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No registered face members found in system. Please enroll biometrics or enter ID manually.'
+        });
+      }
 
-    for (const emp of enrolled) {
-      const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
-      if (result.match && result.similarity > highestSimilarity) {
-        highestSimilarity = result.similarity;
-        bestMatch = emp;
+      const effectiveThreshold = isMasked ? MASKED_THRESHOLD : THRESHOLD;
+
+      for (const emp of enrolled) {
+        const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
+        if (result.match && result.similarity > highestSimilarity) {
+          highestSimilarity = result.similarity;
+          bestMatch = emp;
+        }
       }
     }
 
@@ -261,13 +288,14 @@ export async function identifyAndPunch(req, res) {
       matched: true,
       similarity: highestSimilarity,
       isMasked,
-      biometricMode: isMasked ? 'PERIOCULAR_MASKED' : 'ARCFACE_512D',
+      biometricMode,
       employee: {
         id: bestMatch.id,
         name: bestMatch.name,
         employee_code: bestMatch.employee_code,
         department: bestMatch.department,
         designation: bestMatch.designation,
+        profile_photo: bestMatch.profile_photo,
         epf_number: bestMatch.epf_number || `TN/MAS/0048123/${bestMatch.employee_code} (UAN: 101489201102)`,
       },
       ...punchResult,

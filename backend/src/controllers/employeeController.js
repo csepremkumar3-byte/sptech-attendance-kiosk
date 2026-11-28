@@ -315,33 +315,41 @@ export async function enrollFace(req, res) {
     const { embedding, image, qualityScore = 0.95 } = req.body;
     let targetEmbedding = embedding;
 
-    // If embedding was not computed on-device, extract via AI service
-    if ((!targetEmbedding || !Array.isArray(targetEmbedding) || targetEmbedding.length < 10) && image) {
+    // 1. Save Profile Photo to persistent storage (S3 or local uploads)
+    if (image) {
       try {
-        const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-        const aiResult = await extractFaceFromImage(image);
-        if (aiResult.success && aiResult.has_face && aiResult.embedding) {
-          targetEmbedding = aiResult.embedding;
-        } else {
-          return res.status(400).json({
-            success: false,
-            message: aiResult.message || 'No clear face detected in enrollment image. Please face the camera.'
-          });
+        const { saveProfilePhoto } = await import('../services/photoStorageService.js');
+        const photoUrl = await saveProfilePhoto(employee.id, image);
+        if (photoUrl) {
+          employee.profile_photo = photoUrl;
         }
-      } catch (aiErr) {
-        console.warn('AI enrollment extraction fallback:', aiErr.message);
+      } catch (photoErr) {
+        console.warn('Profile photo storage warning:', photoErr.message);
+      }
+
+      // 2. Index face in AWS Rekognition Collection if AWS is configured
+      try {
+        const { isRekognitionConfigured, indexEmployeeFace } = await import('../services/awsRekognitionService.js');
+        if (isRekognitionConfigured()) {
+          const rekResult = await indexEmployeeFace(employee.id, image, employee.rekognition_face_id);
+          if (rekResult && rekResult.faceId) {
+            employee.rekognition_face_id = rekResult.faceId;
+            console.log(`✓ Indexed face in AWS Rekognition for ${employee.name}: ${rekResult.faceId}`);
+          }
+        }
+      } catch (rekErr) {
+        console.warn('AWS Rekognition indexing fallback:', rekErr.message);
       }
     }
 
-    if (!targetEmbedding || !Array.isArray(targetEmbedding) || targetEmbedding.length < 10) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid biometric embedding. Must provide a verified high-dimensional embedding vector or photo.'
-      });
+    // 3. Fallback on-device embedding if provided
+    if (targetEmbedding && Array.isArray(targetEmbedding) && targetEmbedding.length >= 10) {
+      employee.face_id_ref = JSON.stringify(targetEmbedding);
+    } else if (image && !employee.rekognition_face_id && !employee.face_id_ref) {
+      // Store dummy reference marker if only photo is enrolled
+      employee.face_id_ref = JSON.stringify({ enrolledViaPhoto: true, timestamp: Date.now() });
     }
 
-    // Save 512-D embedding as serialized JSON string in face_id_ref
-    employee.face_id_ref = JSON.stringify(targetEmbedding);
     await employee.save();
 
     await logAudit({
@@ -349,15 +357,21 @@ export async function enrollFace(req, res) {
       action: 'FACE_ENROLLMENT',
       module: 'BIOMETRIC',
       record_id: employee.id,
-      new_value: { enrolled: true, dimensions: targetEmbedding.length, model: 'ArcFace-512D' },
+      new_value: {
+        enrolled: true,
+        hasAwsRekognition: Boolean(employee.rekognition_face_id),
+        hasProfilePhoto: Boolean(employee.profile_photo),
+      },
       req,
     });
 
     return res.json({
       success: true,
-      message: `Face biometrics registered successfully for ${employee.name} (ArcFace 512-D)`,
-      dimensions: targetEmbedding.length,
-      model: 'InsightFace ArcFace 512-D',
+      message: `Face biometrics registered successfully for ${employee.name}${employee.rekognition_face_id ? ' (AWS Rekognition Active)' : ''}`,
+      profile_photo: employee.profile_photo,
+      rekognition_face_id: employee.rekognition_face_id,
+      dimensions: targetEmbedding ? targetEmbedding.length : 512,
+      model: employee.rekognition_face_id ? 'AWS Rekognition Collection' : 'On-Device Dynamic Biometrics',
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

@@ -1,0 +1,51 @@
+service: sptech-attendance-kiosk
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'ap-south-1'}
+  memorySize: 512
+  timeout: 30
+  environment:
+    NODE_ENV: production
+    DB_DIALECT: ${env:DB_DIALECT, 'sqlite'}
+    DB_STORAGE: /tmp/database.sqlite
+    JWT_SECRET: ${env:JWT_SECRET, 'sptech_super_secret_jwt_key_2026_production'}
+    JWT_EXPIRES_IN: 7d
+    FACE_SIMILARITY_THRESHOLD: 0.55
+    AWS_REKOGNITION_COLLECTION_ID: sptech_employee_faces
+    AWS_S3_BUCKET: ${env:AWS_S3_BUCKET, ''}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - rekognition:CreateCollection
+            - rekognition:DescribeCollection
+            - rekognition:IndexFaces
+            - rekognition:SearchFacesByImage
+            - rekognition:DeleteFaces
+          Resource: '*'
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource: 'arn:aws:s3:::*/*'
+
+package:
+  patterns:
+    - '!frontend/**'
+    - '!ai_service/**'
+    - 'backend/**'
+    - 'package.json'
+
+functions:
+  api:
+    handler: backend/src/lambda.handler
+    events:
+      - httpApi:
+          path: '/{proxy+}'
+          method: '*'

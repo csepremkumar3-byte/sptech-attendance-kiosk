@@ -14,6 +14,8 @@ export interface FaceDetectionResult {
   maskConfidence?: number;
   biometricMode?: 'FULL_FACE' | 'PERIOCULAR_MASKED';
   image?: string;
+  eyeOpenness?: number;
+  blinkDetected?: boolean;
 }
 
 /**
@@ -180,6 +182,8 @@ export function extractFaceBiometrics(
   const cellW = Math.floor(faceW / gridCols);
   const cellH = Math.floor(faceH / gridRows);
 
+  const cellLums: number[] = [];
+
   for (let r = 0; r < gridRows; r++) {
     for (let c = 0; c < gridCols; c++) {
       let cellLumSum = 0;
@@ -198,6 +202,7 @@ export function extractFaceBiometrics(
       }
 
       const cellMean = cellLumSum / (count || 1);
+      cellLums.push(cellMean);
       const halfCount = Math.floor(count / 2) || 1;
       const hGrad = (rightLum - leftLum) / halfCount;
       const vGrad = (bottomLum - topLum) / halfCount;
@@ -208,6 +213,12 @@ export function extractFaceBiometrics(
       embedding.push((hGrad + vGrad) / stdFaceLum);
     }
   }
+
+  // Eye openness tracking: compares forehead brightness vs eye socket darkness
+  const foreheadLum = (cellLums[1 * 8 + 2] + cellLums[1 * 8 + 3] + cellLums[1 * 8 + 4] + cellLums[1 * 8 + 5]) / 4;
+  const eyeLum = (cellLums[2 * 8 + 2] + cellLums[2 * 8 + 3] + cellLums[2 * 8 + 4] + cellLums[2 * 8 + 5]) / 4;
+  const eyeContrast = (foreheadLum - eyeLum) / (stdFaceLum || 1);
+  const eyeOpenness = Math.round(Math.max(0.05, Math.min(1.0, (eyeContrast - 0.10) / 0.65)) * 100) / 100;
 
   // Normalize embedding vector to unit length
   const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0)) || 1;
@@ -238,5 +249,6 @@ export function extractFaceBiometrics(
     maskConfidence: Math.round(maskConfidence * 100) / 100,
     biometricMode: isMasked ? 'PERIOCULAR_MASKED' : 'FULL_FACE',
     image: canvasElement.toDataURL('image/jpeg', 0.85),
+    eyeOpenness,
   };
 }

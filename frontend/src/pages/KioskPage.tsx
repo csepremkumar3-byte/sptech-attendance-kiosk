@@ -400,10 +400,23 @@ export const KioskPage: React.FC = () => {
         {/* Attendance Confirmed Receipt View */}
         {punchResult ? (
           <div className="max-w-xl mx-auto w-full bg-white border border-[#E4E7EB] rounded-3xl p-6 sm:p-7 shadow-sm text-center space-y-4 animate-in fade-in zoom-in duration-200">
-            {/* Green Light Visual Indicator Ring */}
-            <div className="w-16 h-16 mx-auto rounded-full bg-[#2FA84F] text-white flex items-center justify-center text-3xl font-black ring-8 ring-[#2FA84F]/20 shadow-lg shadow-emerald-500/10 animate-bounce">
-              ✓
-            </div>
+            {/* Employee Profile Photo or Green Checkmark */}
+            {punchResult.employee?.profile_photo ? (
+              <div className="relative w-20 h-20 mx-auto">
+                <img
+                  src={punchResult.employee.profile_photo}
+                  alt={punchResult.employee.name}
+                  className="w-20 h-20 rounded-2xl object-cover border-2 border-[#2FA84F] shadow-md ring-4 ring-[#2FA84F]/20 animate-in zoom-in"
+                />
+                <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[#2FA84F] text-white flex items-center justify-center text-xs font-bold shadow-xs">
+                  ✓
+                </span>
+              </div>
+            ) : (
+              <div className="w-16 h-16 mx-auto rounded-full bg-[#2FA84F] text-white flex items-center justify-center text-3xl font-black ring-8 ring-[#2FA84F]/20 shadow-lg shadow-emerald-500/10 animate-bounce">
+                ✓
+              </div>
+            )}
 
             <div className="space-y-0.5">
               <span className="text-[11px] uppercase tracking-wider text-[#2FA84F] font-bold">
