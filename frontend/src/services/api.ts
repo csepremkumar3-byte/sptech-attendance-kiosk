@@ -2,7 +2,7 @@
  * SPTech API Client
  */
 
-export const API_BASE = '/api';
+export const API_BASE = (import.meta.env.VITE_API_BASE as string) || '/api';
 
 export function getStoredToken(): string | null {
   return localStorage.getItem('sptech_token');
