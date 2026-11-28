@@ -343,12 +343,11 @@ export const AdminPage: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           image: faceResult.image,
-          embedding: faceResult.embedding,
           qualityScore: faceResult.qualityScore,
         }),
       });
       if (res.success) {
-        setEnrollSuccessMsg(`Face enrolled successfully for ${selectedEmpForEnroll.name} (ArcFace 512-D)`);
+        setEnrollSuccessMsg(`Face enrolled successfully for ${selectedEmpForEnroll.name} (AWS Rekognition)`);
         setTimeout(() => {
           setShowEnrollModal(false);
           setEnrollSuccessMsg(null);
@@ -2216,7 +2215,7 @@ export const AdminPage: React.FC = () => {
                   <span className="text-[11px] font-bold text-[#1A73C7] uppercase tracking-wider block">
                     6. Face Biometric Enrollment (Mandatory for Kiosk Attendance)
                   </span>
-                  <span className="text-[10px] text-slate-400">ArcFace 512-D Profile</span>
+                  <span className="text-[10px] text-slate-400">AWS Rekognition Profile</span>
                 </div>
 
                 {!isFaceCameraOpenForReg && !empForm.face_image ? (
@@ -2271,7 +2270,7 @@ export const AdminPage: React.FC = () => {
                       )}
                       <div>
                         <span className="font-bold text-[#2FA84F] text-xs block">✓ Face Biometrics Captured & Ready</span>
-                        <span className="text-[10px] text-slate-500">512-Dimensional biometric signature will be saved simultaneously with employee record.</span>
+                        <span className="text-[10px] text-slate-500">Face biometric collection will be indexed securely in AWS Rekognition.</span>
                       </div>
                     </div>
                     <button
@@ -2337,7 +2336,7 @@ export const AdminPage: React.FC = () => {
                   autoCaptureOnReady={false}
                 />
                 <p className="text-xs text-slate-500">
-                  Align employee face squarely in the viewfinder and tap "Capture & Mark" to generate the 512-dimensional ArcFace biometric profile.
+                  Align employee face squarely in the viewfinder and tap "Capture & Mark" to index their profile in AWS Rekognition.
                 </p>
                 <button
                   type="button"

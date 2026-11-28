@@ -1,36 +1,32 @@
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { Employee, FaceVerificationLog, Kiosk } from '../models/index.js';
-import { verifyFaceBiometrics } from '../utils/faceMatcher.js';
+import { isRekognitionConfigured, searchEmployeeFace } from '../services/awsRekognitionService.js';
 
 dotenv.config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sptech_super_secret_jwt_key_2026_secure';
-const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD || '0.65');
-const MASKED_THRESHOLD = parseFloat(process.env.FACE_MASK_THRESHOLD || '0.55');
 const LIVENESS_THRESHOLD = parseFloat(process.env.LIVENESS_THRESHOLD || '0.50');
 
+/**
+ * 1:1 Face Verification
+ * Compares live image against employee's enrolled face in AWS Rekognition
+ */
 export async function verifyFace(req, res) {
   try {
     const {
       employee_code,
-      liveEmbedding,
+      image,
       livenessScore = 0.85,
-      singleFaceConfirmed = true,
-      kiosk_id = null,
-      isMasked = false
+      kiosk_id = null
     } = req.body;
 
     if (!employee_code) {
-      return res.status(400).json({ success: false, message: 'Employee code or QR identifier is required' });
+      return res.status(400).json({ success: false, message: 'Employee code is required' });
     }
 
-    if (!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) {
-      return res.status(400).json({ success: false, message: 'Live face embedding vector is required for biometric validation' });
-    }
-
-    if (!singleFaceConfirmed) {
-      return res.status(400).json({ success: false, message: 'Verification rejected: Exactly one face must be visible in frame' });
+    if (!image) {
+      return res.status(400).json({ success: false, message: 'Live face image is required for AWS Rekognition verification' });
     }
 
     // 1. Retrieve employee
@@ -42,7 +38,6 @@ export async function verifyFace(req, res) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
 
-    // 2. Verify active status
     if (employee.status !== 'ACTIVE') {
       await FaceVerificationLog.create({
         employee_id: employee.id,
@@ -53,227 +48,165 @@ export async function verifyFace(req, res) {
       return res.status(403).json({ success: false, message: 'Verification failed: Employee account is inactive' });
     }
 
-    // 3. Verify biometric reference exists
-    if (!employee.face_id_ref) {
+    if (!employee.rekognition_face_id && !employee.face_id_ref) {
       await FaceVerificationLog.create({
         employee_id: employee.id,
         kiosk_id,
         status: 'FAILED',
-        failure_reason: 'No biometric face template registered for this employee'
+        failure_reason: 'No biometric face template registered in AWS Rekognition'
       });
       return res.status(400).json({
         success: false,
-        message: 'Face not registered. Please contact Administrator for facial enrollment.'
+        message: 'Face not registered in AWS Rekognition. Please contact Administrator for facial enrollment.'
       });
     }
 
-    // 4. Liveness anti-spoofing check
-    if (livenessScore < LIVENESS_THRESHOLD) {
+    // 2. Search AWS Rekognition collection
+    const rekMatch = await searchEmployeeFace(image, 80);
+
+    if (!rekMatch.matched || rekMatch.employeeId !== employee.id) {
       await FaceVerificationLog.create({
         employee_id: employee.id,
         kiosk_id,
         status: 'FAILED',
+        similarity_score: rekMatch.similarity ? rekMatch.similarity / 100 : 0,
         liveness_score: livenessScore,
-        failure_reason: 'Liveness anti-spoofing check failed'
-      });
-      return res.status(400).json({
-        success: false,
-        message: `Anti-spoofing / Liveness failed (Score: ${livenessScore}). Ensure live human presence.`
-      });
-    }
-
-    // 5. Compare live face embedding against registered template
-    const effectiveThreshold = isMasked ? MASKED_THRESHOLD : THRESHOLD;
-    const comparison = verifyFaceBiometrics(liveEmbedding, employee.face_id_ref, effectiveThreshold, isMasked);
-
-    if (!comparison.match) {
-      await FaceVerificationLog.create({
-        employee_id: employee.id,
-        kiosk_id,
-        status: 'FAILED',
-        similarity_score: comparison.similarity,
-        liveness_score: livenessScore,
-        failure_reason: `Face similarity (${comparison.similarity}) below threshold (${effectiveThreshold}) [${isMasked ? 'MASKED' : 'STANDARD'}]`
+        failure_reason: `AWS Rekognition face does not match employee ${employee.employee_code}`
       });
       return res.status(401).json({
         success: false,
-        message: `Face verification failed: Biometric match score (${comparison.similarity}) below required threshold (${effectiveThreshold}).`,
-        similarity: comparison.similarity,
-        isMasked,
+        message: 'Face verification failed in AWS Rekognition. Ensure face is positioned clearly looking straight at the camera.',
+        similarity: rekMatch.similarity ? rekMatch.similarity / 100 : 0,
       });
     }
 
-    // 6. Log success
+    // 3. Log success
     await FaceVerificationLog.create({
       employee_id: employee.id,
       kiosk_id,
       status: 'SUCCESS',
-      similarity_score: comparison.similarity,
+      similarity_score: rekMatch.similarity / 100,
       liveness_score: livenessScore,
     });
 
-    // 7. Generate tamper-proof signed biometric verification token
+    // 4. Generate verification token
     const verificationToken = jwt.sign(
       {
         verified_employee_id: employee.id,
         employee_code: employee.employee_code,
         kiosk_id,
-        similarity: comparison.similarity,
-        isMasked,
+        similarity: rekMatch.similarity / 100,
         timestamp: Date.now()
       },
       JWT_SECRET,
-      { expiresIn: '5m' } // Valid for 5 minutes to submit punch
+      { expiresIn: '5m' }
     );
 
     return res.json({
       success: true,
-      message: isMasked ? '✓ Face Verified with Mask (Periocular AI)' : '✓ Face Verified Successfully',
+      message: '✓ Face Verified Successfully via AWS Rekognition',
       employee: {
         id: employee.id,
         name: employee.name,
         employee_code: employee.employee_code,
         department: employee.department,
         designation: employee.designation,
+        profile_photo: employee.profile_photo,
       },
       verificationToken,
-      similarity: comparison.similarity,
+      similarity: rekMatch.similarity / 100,
       livenessScore,
-      isMasked,
-      biometricMode: isMasked ? 'PERIOCULAR_MASKED' : 'FULL_FACE',
+      biometricMode: 'AWS_REKOGNITION',
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Biometric verification error', error: err.message });
+    return res.status(500).json({ success: false, message: 'AWS Rekognition verification error', error: err.message });
   }
 }
 
 /**
  * 1:N Facial Identification & Automatic Attendance Punch
- * Compares live face capture against all registered members.
- * Supports both unmasked (full face) and masked (periocular biometrics).
- * If verified, marks attendance automatically.
+ * Powered 100% by AWS Rekognition Collection
  */
 export async function identifyAndPunch(req, res) {
   try {
     let {
-      liveEmbedding,
       image,
       livenessScore = 0.85,
       kiosk_id = null,
-      punch_type,
-      isMasked = false
+      punch_type
     } = req.body;
 
-    let bestMatch = null;
-    let highestSimilarity = -1;
-    let biometricMode = isMasked ? 'PERIOCULAR_MASKED' : 'ON_DEVICE_EMBEDDING';
-
-    // Tier 1: Search AWS Rekognition Face Collection if configured
-    if (image) {
-      try {
-        const { isRekognitionConfigured, searchEmployeeFace } = await import('../services/awsRekognitionService.js');
-        if (isRekognitionConfigured()) {
-          const rekMatch = await searchEmployeeFace(image, 80);
-          if (rekMatch.matched && rekMatch.employeeId) {
-            const matchedEmp = await Employee.findOne({
-              where: { id: rekMatch.employeeId, status: 'ACTIVE' },
-              attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'profile_photo', 'face_id_ref', 'shift_id', 'epf_number']
-            });
-            if (matchedEmp) {
-              bestMatch = matchedEmp;
-              highestSimilarity = rekMatch.similarity / 100;
-              biometricMode = 'AWS_REKOGNITION';
-            }
-          }
-        }
-      } catch (rekErr) {
-        console.warn('AWS Rekognition live search fallback:', rekErr.message);
-      }
+    if (!image) {
+      return res.status(400).json({ success: false, message: 'Live face image is required. Position face in front of camera.' });
     }
 
-    // Tier 2: Match using high-dimensional on-device biometrics
-    if (!bestMatch) {
-      // 1. If liveEmbedding was not computed on-device, attempt extracting from image
-      if ((!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) && image) {
-        try {
-          const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-          const aiResult = await extractFaceFromImage(image, isMasked);
-          if (aiResult.success && aiResult.has_face && aiResult.embedding) {
-            liveEmbedding = aiResult.embedding;
-            isMasked = aiResult.is_masked !== undefined ? aiResult.is_masked : isMasked;
-          }
-        } catch (err) {
-          console.warn('AI embedding extraction error:', err.message);
-        }
-      }
+    if (!isRekognitionConfigured()) {
+      return res.status(500).json({ success: false, message: 'AWS Rekognition service is not configured.' });
+    }
 
-      if (!liveEmbedding || !Array.isArray(liveEmbedding) || liveEmbedding.length === 0) {
-        return res.status(400).json({ success: false, message: 'No face biometric data captured. Position face in camera.' });
-      }
-
-      // 2. Fetch all active employees with enrolled biometrics
-      const employees = await Employee.findAll({
-        where: { status: 'ACTIVE' },
-        attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'profile_photo', 'face_id_ref', 'shift_id', 'epf_number']
+    // 1. Search employee face in AWS Rekognition Collection
+    let rekMatch;
+    try {
+      rekMatch = await searchEmployeeFace(image, 80);
+    } catch (rekErr) {
+      console.error('AWS Rekognition search error:', rekErr.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Could not detect face in camera stream. Position face clearly in good lighting.'
       });
-
-      const enrolled = employees.filter(e => e.face_id_ref);
-      if (enrolled.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'No registered face members found in system. Please enroll biometrics or enter ID manually.'
-        });
-      }
-
-      const effectiveThreshold = isMasked ? MASKED_THRESHOLD : THRESHOLD;
-
-      for (const emp of enrolled) {
-        const result = verifyFaceBiometrics(liveEmbedding, emp.face_id_ref, effectiveThreshold, isMasked);
-        if (result.match && result.similarity > highestSimilarity) {
-          highestSimilarity = result.similarity;
-          bestMatch = emp;
-        }
-      }
     }
 
-    if (!bestMatch) {
+    if (!rekMatch || !rekMatch.matched || !rekMatch.employeeId) {
       try {
         await FaceVerificationLog.create({
           kiosk_id: kiosk_id ? parseInt(kiosk_id) : null,
           status: 'FAILED',
-          similarity_score: highestSimilarity > 0 ? highestSimilarity : 0,
+          similarity_score: rekMatch?.similarity ? rekMatch.similarity / 100 : 0,
           liveness_score: livenessScore ? parseFloat(livenessScore) : 0.85,
-          failure_reason: `Face not recognized among registered members (Best score: ${highestSimilarity}, Threshold: ${effectiveThreshold}, Masked: ${isMasked})`
+          failure_reason: 'Face not recognized in AWS Rekognition collection'
         });
       } catch (logErr) {
-        console.warn('FaceVerificationLog log error:', logErr.message);
+        console.warn('FaceVerificationLog error:', logErr.message);
       }
 
       return res.status(401).json({
         success: false,
         matched: false,
-        similarity: highestSimilarity,
-        isMasked,
-        message: isMasked
-          ? 'Masked face not recognized. Please adjust mask or enter Employee ID manually below.'
-          : 'Face not recognized. Position clearly or enter Employee ID manually below.'
+        similarity: rekMatch?.similarity ? rekMatch.similarity / 100 : 0,
+        message: 'Face not recognized in AWS Rekognition. Position clearly or contact Administrator.'
       });
     }
 
-    // 4. Log verification result safely
+    // 2. Fetch matched employee from database
+    const bestMatch = await Employee.findOne({
+      where: { id: rekMatch.employeeId, status: 'ACTIVE' },
+      attributes: ['id', 'name', 'employee_code', 'department', 'designation', 'profile_photo', 'rekognition_face_id', 'shift_id', 'epf_number']
+    });
+
+    if (!bestMatch) {
+      return res.status(404).json({
+        success: false,
+        matched: false,
+        message: 'Face matched in AWS collection, but employee account is inactive or not found.'
+      });
+    }
+
+    const similarityScore = rekMatch.similarity / 100;
+
+    // 3. Log verification result
     try {
       await FaceVerificationLog.create({
         employee_id: bestMatch.id,
         kiosk_id: kiosk_id ? parseInt(kiosk_id) : null,
         status: 'SUCCESS',
-        similarity_score: highestSimilarity,
+        similarity_score: similarityScore,
         liveness_score: livenessScore ? parseFloat(livenessScore) : 0.85,
       });
     } catch (logErr) {
       console.warn('FaceVerificationLog save warning:', logErr.message);
     }
 
-    // 5. Automatically Mark Attendance Punch
+    // 4. Automatically Mark Attendance Punch in database
     const { processPunch } = await import('../services/attendanceService.js');
     const punchResult = await processPunch({
       employee_id: bestMatch.id,
@@ -286,9 +219,8 @@ export async function identifyAndPunch(req, res) {
     return res.json({
       success: true,
       matched: true,
-      similarity: highestSimilarity,
-      isMasked,
-      biometricMode,
+      similarity: similarityScore,
+      biometricMode: 'AWS_REKOGNITION',
       employee: {
         id: bestMatch.id,
         name: bestMatch.name,
@@ -308,4 +240,3 @@ export async function identifyAndPunch(req, res) {
     });
   }
 }
-

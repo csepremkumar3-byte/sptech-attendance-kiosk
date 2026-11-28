@@ -139,10 +139,8 @@ export const KioskPage: React.FC = () => {
           method: 'POST',
           body: JSON.stringify({
             image: faceResult.image,
-            liveEmbedding: faceResult.embedding,
             livenessScore: faceResult.livenessScore,
             kiosk_id: selectedKioskId,
-            isMasked: !!faceResult.isMasked,
           }),
         });
 
@@ -615,7 +613,7 @@ export const KioskPage: React.FC = () => {
                     <div className="space-y-2.5 text-xs">
                       <div className="flex justify-between items-center py-1 border-b border-slate-100">
                         <span className="text-slate-500">Biometric Engine:</span>
-                        <span className="font-semibold text-[#2FA84F]">ArcFace 512-D Neural Core</span>
+                        <span className="font-semibold text-[#2FA84F]">AWS Rekognition AI Engine</span>
                       </div>
                       <div className="flex justify-between items-center py-1 border-b border-slate-100">
                         <span className="text-slate-500">Attendance Sync:</span>

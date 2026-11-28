@@ -118,26 +118,11 @@ export async function createEmployee(req, res) {
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password || 'password123', salt);
 
-    let face_id_ref = req.body.face_id_ref || null;
-    if (req.body.embedding && (Array.isArray(req.body.embedding) ? req.body.embedding.length > 0 : Boolean(req.body.embedding))) {
-      face_id_ref = typeof req.body.embedding === 'string' ? req.body.embedding : JSON.stringify(req.body.embedding);
-    } else if (req.body.image) {
-      try {
-        const { extractFaceFromImage } = await import('../services/aiBiometricService.js');
-        const aiResult = await extractFaceFromImage(req.body.image);
-        if (aiResult.success && aiResult.has_face && aiResult.embedding) {
-          face_id_ref = JSON.stringify(aiResult.embedding);
-        }
-      } catch (e) {
-        console.warn('AI embedding extraction error during create:', e);
-      }
-    }
-
     const employee = await Employee.create({
       name,
       employee_code,
       password_hash,
-      face_id_ref,
+      face_id_ref: null,
       shift_id: shift_id ? parseInt(shift_id) : null,
       salary_per_hour: salary_per_hour ? parseFloat(salary_per_hour) : 150.0,
       date_of_joining: date_of_joining || new Date().toISOString().split('T')[0],
@@ -163,6 +148,30 @@ export async function createEmployee(req, res) {
       education_details,
       previous_experience,
     });
+
+    // If initial face photo provided, save photo and index in AWS Rekognition
+    if (req.body.image) {
+      try {
+        const { saveProfilePhoto } = await import('../services/photoStorageService.js');
+        const photoUrl = await saveProfilePhoto(employee.id, req.body.image);
+        if (photoUrl) employee.profile_photo = photoUrl;
+      } catch (e) {
+        console.warn('Photo save error:', e.message);
+      }
+
+      try {
+        const { indexEmployeeFace } = await import('../services/awsRekognitionService.js');
+        const rek = await indexEmployeeFace(employee.id, req.body.image);
+        if (rek && rek.faceId) {
+          employee.rekognition_face_id = rek.faceId;
+          employee.face_id_ref = rek.faceId;
+        }
+      } catch (e) {
+        console.warn('AWS Rekognition index warning during create:', e.message);
+      }
+
+      await employee.save();
+    }
 
     // Record initial salary history entry (1-year standard period)
     const joinDate = employee.date_of_joining || new Date().toISOString().split('T')[0];
@@ -312,44 +321,38 @@ export async function enrollFace(req, res) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
 
-    const { embedding, image, qualityScore = 0.95 } = req.body;
-    let targetEmbedding = embedding;
-
-    // 1. Save Profile Photo to persistent storage (S3 or local uploads)
-    if (image) {
-      try {
-        const { saveProfilePhoto } = await import('../services/photoStorageService.js');
-        const photoUrl = await saveProfilePhoto(employee.id, image);
-        if (photoUrl) {
-          employee.profile_photo = photoUrl;
-        }
-      } catch (photoErr) {
-        console.warn('Profile photo storage warning:', photoErr.message);
-      }
-
-      // 2. Index face in AWS Rekognition Collection if AWS is configured
-      try {
-        const { isRekognitionConfigured, indexEmployeeFace } = await import('../services/awsRekognitionService.js');
-        if (isRekognitionConfigured()) {
-          const rekResult = await indexEmployeeFace(employee.id, image, employee.rekognition_face_id);
-          if (rekResult && rekResult.faceId) {
-            employee.rekognition_face_id = rekResult.faceId;
-            console.log(`✓ Indexed face in AWS Rekognition for ${employee.name}: ${rekResult.faceId}`);
-          }
-        }
-      } catch (rekErr) {
-        console.warn('AWS Rekognition indexing fallback:', rekErr.message);
-      }
+    const { image } = req.body;
+    if (!image) {
+      return res.status(400).json({ success: false, message: 'Employee face photo is required for AWS Rekognition enrollment.' });
     }
 
-    // 3. Fallback on-device embedding if provided
-    if (targetEmbedding && Array.isArray(targetEmbedding) && targetEmbedding.length >= 10) {
-      employee.face_id_ref = JSON.stringify(targetEmbedding);
-    } else if (image && !employee.rekognition_face_id && !employee.face_id_ref) {
-      // Store dummy reference marker if only photo is enrolled
-      employee.face_id_ref = JSON.stringify({ enrolledViaPhoto: true, timestamp: Date.now() });
+    // 1. Save Profile Photo to persistent storage (S3 or database URL)
+    try {
+      const { saveProfilePhoto } = await import('../services/photoStorageService.js');
+      const photoUrl = await saveProfilePhoto(employee.id, image);
+      if (photoUrl) {
+        employee.profile_photo = photoUrl;
+      }
+    } catch (photoErr) {
+      console.warn('Profile photo storage warning:', photoErr.message);
     }
 
+    // 2. Index face directly in AWS Rekognition Collection
+    const { isRekognitionConfigured, indexEmployeeFace } = await import('../services/awsRekognitionService.js');
+    if (!isRekognitionConfigured()) {
+      return res.status(500).json({ success: false, message: 'AWS Rekognition service is not configured.' });
+    }
+
+    const rekResult = await indexEmployeeFace(employee.id, image, employee.rekognition_face_id);
+    if (!rekResult || !rekResult.faceId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No clear face detected by AWS Rekognition. Please ensure front-facing position and good lighting.'
+      });
+    }
+
+    employee.rekognition_face_id = rekResult.faceId;
+    employee.face_id_ref = rekResult.faceId;
     await employee.save();
 
     await logAudit({
@@ -359,7 +362,7 @@ export async function enrollFace(req, res) {
       record_id: employee.id,
       new_value: {
         enrolled: true,
-        hasAwsRekognition: Boolean(employee.rekognition_face_id),
+        awsRekognitionFaceId: employee.rekognition_face_id,
         hasProfilePhoto: Boolean(employee.profile_photo),
       },
       req,
@@ -367,11 +370,10 @@ export async function enrollFace(req, res) {
 
     return res.json({
       success: true,
-      message: `Face biometrics registered successfully for ${employee.name}${employee.rekognition_face_id ? ' (AWS Rekognition Active)' : ''}`,
+      message: `Face enrolled successfully in AWS Rekognition for ${employee.name}`,
       profile_photo: employee.profile_photo,
       rekognition_face_id: employee.rekognition_face_id,
-      dimensions: targetEmbedding ? targetEmbedding.length : 512,
-      model: employee.rekognition_face_id ? 'AWS Rekognition Collection' : 'On-Device Dynamic Biometrics',
+      model: 'AWS Rekognition (Collection: sptech_employee_faces)',
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
